@@ -14,7 +14,7 @@ class MailTask extends Task{
    public function getPlugin(): Mail{
       return $this->plugin;
    }
-   public function onRun($currentTick){
+   public function onRun(): void {
       foreach($this->getPlugin()->getServer()->getOnlinePlayers() as $player){
          if((Time() % 180) == 0){
             $player->sendMessage($this->getPlugin()->countMail($player->getName()));

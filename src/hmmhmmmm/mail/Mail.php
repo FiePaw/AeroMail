@@ -3,7 +3,6 @@
 namespace hmmhmmmm\mail;
 
 use hmmhmmmm\mail\cmd\MailCommand;
-use hmmhmmmm\mail\cmd\ReportCommand;
 use hmmhmmmm\mail\data\Language;
 use hmmhmmmm\mail\data\PlayerData;
 use hmmhmmmm\mail\listener\EventListener;
@@ -11,19 +10,22 @@ use hmmhmmmm\mail\scheduler\MailTask;
 use hmmhmmmm\mail\ui\Form;
 use jojoe77777\FormAPI\Form as jojoe77777Form;
 
-use pocketmine\Player;
+
+
+use pocketmine\player;
 use pocketmine\plugin\PluginBase;
 use pocketmine\plugin\Plugin;
 use pocketmine\utils\Config;
 
 class Mail extends PluginBase implements MailAPI{
-   private static $instance = null;
+   public static Mail $instance;
    private $prefix = "?";
    private $facebook = "§cwithout";
    private $youtube = "§cwithout";
    private $discord = "§cwithout";
    private $language = null;
    private $form = null;
+   private $PluginOwned;
    public $array = [];
    
    public $langClass = [
@@ -31,14 +33,18 @@ class Mail extends PluginBase implements MailAPI{
       "english"
    ];
    
-   public static function getInstance(): Mail{
-      return self::$instance;
-   }
-   public function onLoad(){
+    public static function getInstance(): self
+    {
+        return self::$instance;
+    }
+   public function onLoad(): void
+   {
       self::$instance = $this;
+      Mail::$instance = $this;
    } 
    
-   public function onEnable(){
+   public function onEnable(): void
+   {
       @mkdir($this->getDataFolder());
       @mkdir($this->getDataFolder()."account/");
       @mkdir($this->getDataFolder()."language/");
@@ -50,11 +56,7 @@ class Mail extends PluginBase implements MailAPI{
       $this->form = new Form($this);
       $this->getServer()->getPluginManager()->registerEvents(new EventListener($this), $this);
       $this->getScheduler()->scheduleRepeatingTask(new MailTask($this), 20);
-      $cmd = [
-         new MailCommand($this),
-         new ReportCommand($this)
-      ];
-      $this->getServer()->getCommandMap()->registerAll("MailPlugin", $cmd);
+      $this->getServer()->getCommandMap()->register("mail", new MailCommand($this));
       
       $langConfig = $this->getConfig()->getNested("language");
       if(!in_array($langConfig, $this->langClass)){
@@ -69,6 +71,7 @@ class Mail extends PluginBase implements MailAPI{
          return;
       }
    }
+   
    public function getPrefix(): string{
       return "§e[§d".$this->prefix."§e]§f";
    }
@@ -139,7 +142,8 @@ class Mail extends PluginBase implements MailAPI{
    public function isCountMailSender(string $name, string $senderName): bool{
       $playerData = $this->getPlayerData($name);
       $data = $playerData->getConfig()->getAll();       
-      return isset($data["mail"]["message"][$senderName]["count"]);           }     
+      return isset($data["mail"]["message"][$senderName]["count"]);        
+   }     
    public function setCountMailSender(string $name, string $senderName, int $count): void{
       $playerData = $this->getPlayerData($name);
       $data = $playerData->getConfig();      
@@ -315,4 +319,320 @@ class Mail extends PluginBase implements MailAPI{
       $data->setNested("mail.message", []);
       $data->save();
    }
+   public function getPrefix(): string{
+      return $this->getPlugin()->getPrefix();
+   }
+   
+   public function createCustomForm(?callable $function = null): CustomForm{
+      return new CustomForm($function);
+   }
+   public function createSimpleForm(?callable $function = null): SimpleForm{
+      return new SimpleForm($function);
+   }
+   public function createModalForm(?callable $function = null): ModalForm{
+      return new ModalForm($function);
+   }
+
+   public function MailMenu(Player $player, string $content = ""): void{
+      $form = $this->createSimpleForm(function ($player, $data){
+         if(!($data === null)){
+            if($data == 0){
+               if(!$player->hasPermission("mail.command.write")){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.menu.error1");
+                  $this->MailMenu($player, $text);
+                  return;
+               }
+               $this->MailWrite($player);
+            }
+            if($data == 1){
+               if(!$player->hasPermission("mail.command.see")){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.menu.error1");
+                  $this->MailMenu($player, $text);
+                  return;
+               }
+               if($this->getPlugin()->getCountMailPlayers($player->getName()) == 0){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.menu.error2");
+                  $this->MailMenu($player, $text);
+                  return;
+               }
+               $this->MailSeeAll($player);
+            }
+            if($data == 2){
+               if(!$player->hasPermission("mail.command.read") && !$player->hasPermission("mail.command.readall")){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.menu.error1");
+                  $this->MailMenu($player, $text);
+                  return;
+               }
+               if($this->getPlugin()->getMailSenderCount($player->getName()) == 0){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.menu.error3");
+                  $this->MailMenu($player, $text);
+                  return;
+               }
+               $this->MailReadAll($player);
+            }
+            if($data == 3){
+               if(!$player->hasPermission("mail.command.clearall")){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.menu.error1");
+                  $this->MailMenu($player, $text);
+                  return;
+               }
+               $this->MailClearAll($player);
+            }
+         }
+      });
+      $form->setTitle($this->getPrefix()." Menu");
+      $form->setContent($content);
+      $form->addButton($this->getPlugin()->getLanguage()->getTranslate("form.menu.button1"));
+      $form->addButton($this->getPlugin()->getLanguage()->getTranslate("form.menu.button2"));
+      $form->addButton($this->getPlugin()->getLanguage()->getTranslate("form.menu.button3", [$this->getPlugin()->getCountMail($player->getName())]));
+      $form->addButton($this->getPlugin()->getLanguage()->getTranslate("form.menu.button4"));
+      $form->sendToPlayer($player);
+   }
+   public function MailWrite(Player $player, string $content = ""): void{
+      $form = $this->createCustomForm(function ($player, $data){
+         if($data == null){
+            return;
+         }
+         $name = explode(" ", $data[1]); 
+         if($name[0] == null){
+            $text = $this->getPlugin()->getLanguage()->getTranslate("form.write.error1");
+            $this->MailWrite($player, $text);
+            return;
+         }
+         $playerData = $this->getPlugin()->getPlayerData($name[0]);
+         if(!$playerData->isData()){
+            $text = $this->getPlugin()->getLanguage()->getTranslate("form.write.error2");
+            $this->MailWrite($player, $text);
+            return;
+         }
+         $message = explode(" ", $data[2]); 
+         if($message[0] == null){
+            $text = $this->getPlugin()->getLanguage()->getTranslate("form.write.error3");
+            $this->MailWrite($player, $text);
+            return;
+         }
+         $message = $data[2];
+         $this->getPlugin()->addMail($playerData->getName(), $player, $message, false);
+         $pOnline = $this->getPlugin()->getServer()->getPlayer($name[0]);
+         if($pOnline instanceof Player){
+            $this->MailAdd($pOnline, $player->getName());
+         }
+      });
+      $form->setTitle($this->getPrefix()." Write");
+      $form->addLabel($content);
+      $form->addInput($this->getPlugin()->getLanguage()->getTranslate("form.write.input1"));
+      $form->addInput($this->getPlugin()->getLanguage()->getTranslate("form.write.input2"));
+      $form->sendToPlayer($player);
+   }
+   public function MailSeeMsg(Player $player, string $senderName, string $content = ""): void{
+      $senderName = strtolower($senderName);
+      $pOnline = $this->getPlugin()->getServer()->getPlayer($senderName);
+      $form = $this->createCustomForm(function ($player, $data) use ($senderName, $content, $pOnline){
+         if(!($data === null)){
+            $message = explode(" ", $data[1]); 
+            if($message[0] == null){
+               $text = $this->getPlugin()->getLanguage()->getTranslate("form.seemsg.error1")."\n".$content;
+               $this->MailSeeMsg($player, $senderName, $text);
+               return;
+            }
+            $message = $data[1];
+            $this->getPlugin()->addMail($senderName, $player, $message, false);
+            if($pOnline instanceof Player){
+               $this->MailAdd($pOnline, $player->getName());
+            }
+         }
+         
+      });
+      if($pOnline instanceof Player){
+         $online = $this->getPlugin()->getLanguage()->getTranslate("form.seemsg.online");
+      }else{
+         $online = $this->getPlugin()->getLanguage()->getTranslate("form.seemsg.offline");
+      }
+      $form->setTitle($this->getPlugin()->getLanguage()->getTranslate("form.seemsg.title", [$senderName, $online]));
+      $form->addLabel($content);
+      $form->addInput("", $this->getPlugin()->getLanguage()->getTranslate("form.seemsg.input1"));
+      $form->sendToPlayer($player);
+   }
+   public function MailSeeAll(Player $player, string $content = ""): void{
+       $array = [];
+       foreach($this->getPlugin()->getMailPlayers($player->getName()) as $senderName){
+         $array[] = $senderName;
+      }
+      $form = $this->createSimpleForm(function ($player, $data) use ($array){
+         if(!($data === null)){
+            $name = $array[$data];
+            if(!$this->getPlugin()->isMailSender($name, strtolower($player->getName()))){
+               $text = $this->getPlugin()->getLanguage()->getTranslate("form.seeall.error1");
+               $this->MailSeeAll($player, $text);
+               return;
+            }
+            $array2 = [];
+            foreach($this->getPlugin()->getMailSenderWrite($name, strtolower($player->getName())) as $msgCount2){
+               $array2[] = $this->getPlugin()->readMail($name, strtolower($player->getName()), $msgCount2);
+            }
+            if(!empty($array2)){
+               $msg = implode("\n", $array2);
+               $this->MailSeeMsg($player, $name, $msg);
+            }else{
+               $player->sendMessage("§cMessage not found");
+            }
+         }
+      });
+      $form->setTitle($this->getPrefix()." SeeAll");
+      $form->setContent($content);
+      for($i = 0; $i < count($array); $i++){
+         $form->addButton($array[$i]);
+      }
+      $form->sendToPlayer($player);
+   }
+   public function MailReadMsg(Player $player, string $senderName, string $content = ""): void{
+      $senderName = strtolower($senderName);
+      $pOnline = $this->getPlugin()->getServer()->getPlayer($senderName);
+      $form = $this->createCustomForm(function ($player, $data) use ($senderName, $content, $pOnline){
+         if(!($data === null)){
+            if($data[1] == 0){
+               $message = explode(" ", $data[2]); 
+               if($message[0] == null){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.readmsg.error1")."\n".$content;
+                  $this->MailReadMsg($player, $senderName, $text);
+                  return;
+               }
+               $message = $data[2];
+               $this->getPlugin()->addMail($senderName, $player, $message, false);
+               if($pOnline instanceof Player){
+                  $this->MailAdd($pOnline, $player->getName());
+               }
+            }
+            if($data[1] == 1){
+               $msgCount = explode(" ", $data[2]); 
+               if($msgCount[0] == null && !is_numeric($msgCount[0])){
+                  $text = $this->getPlugin()->getLanguage()->getTranslate("form.readmsg.error2")."\n".$content;
+                  $this->MailReadMsg($player, $senderName, $text);
+                  return;
+               }
+               $msgCount = (int) $data[2];
+               $this->getPlugin()->delMailSender($player, strtolower($senderName), $msgCount);
+            }
+         }
+      });
+      if($pOnline instanceof Player){
+         $online = $this->getPlugin()->getLanguage()->getTranslate("form.readmsg.online");
+         $pOnline->sendMessage($this->getPrefix()." ".$this->getPlugin()->getLanguage()->getTranslate("form.readmsg.complete", [$player->getName()]));
+      }else{
+         $online = $this->getPlugin()->getLanguage()->getTranslate("form.readmsg.offline");
+      }
+      $form->setTitle($this->getPlugin()->getLanguage()->getTranslate("form.readmsg.title", [$senderName, $online]));
+      $form->addLabel($content);
+      $form->addDropdown($this->getPlugin()->getLanguage()->getTranslate("form.readmsg.dropdown1.title"), [$this->getPlugin()->getLanguage()->getTranslate("form.readmsg.dropdown1.step1"), $this->getPlugin()->getLanguage()->getTranslate("form.readmsg.dropdown1.step2")]); 
+      $form->addInput("");
+      $form->sendToPlayer($player);
+   }
+   public function MailReadAll(Player $player, string $content = ""){
+       $array = [];
+       foreach($this->getPlugin()->getMailSender($player->getName()) as $senderName){
+         $array[] = $senderName;
+      }
+      $form = $this->createSimpleForm(function ($player, $data) use ($array){
+         if(!($data === null)){
+            $name = $array[$data];
+            $count = $this->getPlugin()->getCountMail($player->getName()) - $this->getPlugin()->getCountMailSender($player->getName(), $name);
+            $this->getPlugin()->setCountMail($player->getName(), $count);
+            $this->getPlugin()->setCountMailSender($player->getName(), $name, 0);
+            foreach($this->getPlugin()->getMailSenderWrite($player->getName(), $name) as $msgCount2){
+               $this->getPlugin()->setMailRead($player->getName(), $name, $msgCount2, true);
+            }
+            $array2 = [];
+            foreach($this->getPlugin()->getMailSenderWrite($player->getName(), $name) as $msgCount2){
+               $array2[] = $this->getPlugin()->readMail($player->getName(), $name, $msgCount2);
+            }
+            if(!empty($array2)){
+               $msg = implode("\n", $array2);
+               $this->MailReadMsg($player, $name, $msg);
+            }else{
+               $player->sendMessage("§cMessage not found");
+            }
+            
+         }
+      });
+      $form->setTitle($this->getPrefix()." ReadAll");
+      $form->setContent($content);         
+      for($i = 0; $i < count($array); $i++){
+         $form->addButton($this->getPlugin()->listMail($player->getName(), $array[$i]));
+      }
+      $form->sendToPlayer($player);
+   }
+   public function MailClearAll(Player $player): void{
+      $form = $this->createModalForm(function ($player, $data){
+         if(!($data === null)){
+            if($data == 1){//ปุ่ม1
+               $this->getPlugin()->resetMail($player->getName());
+               $player->sendMessage($this->getPrefix()." ".$this->getPlugin()->getLanguage()->getTranslate("form.clearall.complete"));
+            }
+            if($data == 0){//ปุ่ม2
+            }
+         }
+      });
+      $form->setTitle($this->getPrefix()." ClearAll");
+      $text = $this->getPlugin()->getLanguage()->getTranslate("form.clearall.content");
+      $form->setContent($text);
+      $form->setButton1($this->getPlugin()->getLanguage()->getTranslate("form.clearall.button1")); 
+      $form->setButton2($this->getPlugin()->getLanguage()->getTranslate("form.clearall.button2"));
+      $form->sendToPlayer($player);
+   }
+   public function MailAdd(Player $player, string $senderName): void{
+      $senderName = strtolower($senderName);
+      $sender = $this->getPlugin()->getServer()->getPlayer($senderName);
+      if(!$sender instanceof Player){
+         $groupSender = "§4Owner";
+      }else{
+         if($sender->isOp()){
+            $groupSender = "§2Admin";
+         }else{
+            $groupSender = "§ePlayer";
+         }
+      }
+      $form = $this->createModalForm(function ($player, $data) use ($senderName){
+         if(!($data === null)){
+            if($data == 1){//ปุ่ม1
+               $name = $senderName;
+               $count = $this->getPlugin()->getCountMail($player->getName()) - $this->getPlugin()->getCountMailSender($player->getName(), $name);
+               $this->getPlugin()->setCountMail($player->getName(), $count);
+               $this->getPlugin()->setCountMailSender($player->getName(), $name, 0);
+               foreach($this->getPlugin()->getMailSenderWrite($player->getName(), $name) as $msgCount2){
+                  $this->getPlugin()->setMailRead($player->getName(), $name, $msgCount2, true);
+               }
+               $array2 = [];
+               foreach($this->getPlugin()->getMailSenderWrite($player->getName(), $name) as $msgCount2){
+                  $array2[] = $this->getPlugin()->readMail($player->getName(), $name, $msgCount2);
+               }
+               if(!empty($array2)){
+                  $msg = implode("\n", $array2);
+                  $this->MailReadMsg($player, $name, $msg);
+               }else{
+                  $player->sendMessage("§cMessage not found");
+               }
+            }
+            if($data == 0){//ปุ่ม2
+            }
+         }
+      });
+      $form->setTitle($this->getPrefix()." Add");
+      $text = $this->getPrefix()." ".$this->getPlugin()->getLanguage()->getTranslate("form.add.content", [$groupSender, $sender->getName()]);
+      $form->setContent($text);
+      $form->setButton1($this->getPlugin()->getLanguage()->getTranslate("form.add.button1")); 
+      $form->setButton2($this->getPlugin()->getLanguage()->getTranslate("form.add.button2"));
+      $form->sendToPlayer($player);
+   }
+   public function MessageUI(Player $player, string $content = ""): void{
+      $form = $this->createSimpleForm(function ($player, $data){
+         if($data === null){
+            return;
+         }
+      });
+      $form->setTitle($this->getPrefix()." Message UI");
+      $form->setContent($content);
+      $form->addButton($this->getPlugin()->getLanguage()->getTranslate("form.clearall.button1"));
+      $form->sendToPlayer($player);
+   }
+   
 }
